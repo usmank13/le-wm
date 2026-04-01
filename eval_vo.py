@@ -33,9 +33,25 @@ class VOProbe(nn.Module):
 
 
 def load_lewm_encoder(ckpt_path, device):
-    model = torch.load(ckpt_path, map_location=device, weights_only=False)
-    model.eval()
-    return model.encoder, model.projector
+    from train_dinov2 import DINOv2Encoder
+    from module import MLP
+
+    ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+    sd = ckpt['state_dict'] if 'state_dict' in ckpt else ckpt
+
+    # Reconstruct encoder
+    encoder = DINOv2Encoder(freeze=True)
+    enc_sd = {k.replace('model.encoder.', ''): v for k, v in sd.items() if k.startswith('model.encoder.')}
+    encoder.load_state_dict(enc_sd, strict=True)
+    encoder = encoder.to(device).eval()
+
+    # Reconstruct projector  (384 -> 192, hidden=2048, BN)
+    projector = MLP(input_dim=384, output_dim=192, hidden_dim=2048, norm_fn=torch.nn.BatchNorm1d)
+    proj_sd = {k.replace('model.projector.', ''): v for k, v in sd.items() if k.startswith('model.projector.')}
+    projector.load_state_dict(proj_sd, strict=True)
+    projector = projector.to(device).eval()
+
+    return encoder, projector
 
 
 def load_dinov2_small(device):

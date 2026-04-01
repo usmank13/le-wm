@@ -23,9 +23,45 @@ def preprocess(frames_np, device='cpu'):
 
 
 def load_model(ckpt_path, device):
-    model = torch.load(ckpt_path, map_location=device, weights_only=False)
-    model.eval()
-    return model
+    """Load JEPA model from Lightning checkpoint."""
+    from train_dinov2 import DINOv2Encoder
+    from module import ARPredictor, Embedder, MLP
+    from jepa import JEPA
+
+    ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+    sd = ckpt['state_dict'] if 'state_dict' in ckpt else ckpt
+
+    # Config from the DINOv2 training: hidden=384, embed=192, action_dim=2, frameskip=2
+    hidden_dim = 384
+    embed_dim = 192
+    effective_act_dim = 2 * 2  # action_dim * frameskip
+
+    encoder = DINOv2Encoder(freeze=True)
+    enc_sd = {k.replace('model.encoder.', ''): v for k, v in sd.items() if k.startswith('model.encoder.')}
+    encoder.load_state_dict(enc_sd, strict=True)
+
+    projector = MLP(input_dim=hidden_dim, output_dim=embed_dim, hidden_dim=2048, norm_fn=torch.nn.BatchNorm1d)
+    proj_sd = {k.replace('model.projector.', ''): v for k, v in sd.items() if k.startswith('model.projector.')}
+    projector.load_state_dict(proj_sd, strict=True)
+
+    predictor = ARPredictor(
+        num_frames=3, input_dim=embed_dim, hidden_dim=hidden_dim,
+        output_dim=hidden_dim, depth=6, heads=16, mlp_dim=2048,
+        dim_head=64, dropout=0.1, emb_dropout=0.0,
+    )
+    pred_sd = {k.replace('model.predictor.', ''): v for k, v in sd.items() if k.startswith('model.predictor.')}
+    predictor.load_state_dict(pred_sd, strict=True)
+
+    pred_proj = MLP(input_dim=hidden_dim, output_dim=embed_dim, hidden_dim=2048, norm_fn=torch.nn.BatchNorm1d)
+    pp_sd = {k.replace('model.pred_proj.', ''): v for k, v in sd.items() if k.startswith('model.pred_proj.')}
+    pred_proj.load_state_dict(pp_sd, strict=True)
+
+    action_encoder = Embedder(input_dim=effective_act_dim, emb_dim=embed_dim)
+    ae_sd = {k.replace('model.action_encoder.', ''): v for k, v in sd.items() if k.startswith('model.action_encoder.')}
+    action_encoder.load_state_dict(ae_sd, strict=True)
+
+    model = JEPA(encoder, predictor, action_encoder, projector, pred_proj)
+    return model.to(device).eval()
 
 
 def load_episodes(h5_path):
