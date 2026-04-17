@@ -66,7 +66,8 @@ def load_full_model(ckpt_path, model_type, device):
         heads=pcfg['heads'], mlp_dim=pcfg['mlp_dim'],
         input_dim=pcfg['input_dim'], hidden_dim=pcfg['hidden_dim'],
         dim_head=pcfg['dim_head'])
-    pred_proj = MLP(input_dim=pcfg['hidden_dim'], output_dim=embed_dim,
+    pred_proj_input = pcfg.get('output_dim', pcfg['hidden_dim'])
+    pred_proj = MLP(input_dim=pred_proj_input, output_dim=embed_dim,
                     hidden_dim=2048, norm_fn=torch.nn.BatchNorm1d)
 
     act_w = sd.get('model.action_encoder.patch_embed.weight')
@@ -222,7 +223,6 @@ def main():
         'brightness_jump': perturb_brightness_jump,
         'color_swap': perturb_color_swap,
         'temporal_reversal': perturb_temporal_reversal,
-        'freeze': perturb_freeze,
         'teleportation': None,  # needs other_pixels, handled separately
     }
 

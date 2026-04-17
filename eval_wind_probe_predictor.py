@@ -68,8 +68,15 @@ def infer_predictor_config(sd):
     dim_head = 64
     heads = total_qkv // (3 * dim_head)
 
+    # Determine output_dim: if output_proj exists, its output shape; else hidden_dim
+    out_proj_w = sd.get('model.predictor.transformer.output_proj.weight')
+    if out_proj_w is not None and out_proj_w.dim() == 2:
+        output_dim = out_proj_w.shape[0]
+    else:
+        output_dim = hidden_dim  # no output_proj or Identity
+
     return dict(num_frames=num_frames, input_dim=input_dim, hidden_dim=hidden_dim,
-                depth=depth, heads=heads, dim_head=dim_head, mlp_dim=mlp_dim)
+                output_dim=output_dim, depth=depth, heads=heads, dim_head=dim_head, mlp_dim=mlp_dim)
 
 
 def load_full_model(ckpt_path, model_type, device):
