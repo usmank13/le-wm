@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+
+# Training artifacts
+wandb/
+outputs/
+JEPA World Models/
+
+# Auto-generated environment snapshots
+environment.json
+environment_v*.json
+requirements_frozen.txt
+requirements_frozen_v*.txt
