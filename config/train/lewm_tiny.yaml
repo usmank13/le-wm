@@ -2,7 +2,7 @@ defaults:
   - _self_
   - data: aigen
 
-output_model_name: lewm
+output_model_name: lewm_tiny
 subdir: ${hydra:job.id}
 
 num_workers: 6
@@ -10,7 +10,7 @@ train_split: 0.9
 seed: 3072
 img_size: 224
 patch_size: 14
-encoder_scale: small
+encoder_scale: tiny
 dump_object: True
 
 trainer:
@@ -21,7 +21,7 @@ trainer:
   gradient_clip_val: 1.0
 
 loader:
-  batch_size: 32
+  batch_size: 64
   num_workers: ${num_workers}
   persistent_workers: True
   prefetch_factor: 3

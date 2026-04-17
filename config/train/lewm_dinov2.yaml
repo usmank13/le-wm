@@ -2,7 +2,7 @@ defaults:
   - _self_
   - data: aigen
 
-output_model_name: lewm
+output_model_name: lewm_dinov2
 subdir: ${hydra:job.id}
 
 num_workers: 6
@@ -11,6 +11,7 @@ seed: 3072
 img_size: 224
 patch_size: 14
 encoder_scale: small
+freeze_encoder: true
 dump_object: True
 
 trainer:

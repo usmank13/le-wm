@@ -1,0 +1,13 @@
+dataset:
+  num_steps: ${eval:'${wm.num_preds} + ${wm.history_size}'}
+  frameskip: 2
+  name: aigen_train_depth
+  cache_dir: /data/lewm_data
+  keys_to_load:
+    - pixels
+    - action
+    - proprio
+    - depth
+  keys_to_cache:
+    - action
+    - proprio
