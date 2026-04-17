@@ -188,11 +188,14 @@ def encode_session(encoder, projector, frames_np, device, batch_size=32):
     return feature.numpy()
 
 
-def run_wind_probe(features, wind_speeds, feature_dim_label=""):
+def run_wind_probe(features, wind_speeds, feature_dim_label="", pca_dims=None):
     """Train a ridge regression probe and report results.
     
     Uses leave-one-out or 5-fold CV depending on sample size.
+    If pca_dims is set, reduce features with PCA first.
     """
+    from sklearn.decomposition import PCA
+    
     X = np.stack(features)
     y = np.array(wind_speeds)
     
@@ -204,6 +207,14 @@ def run_wind_probe(features, wind_speeds, feature_dim_label=""):
     X_mean = X.mean(axis=0, keepdims=True)
     X_std = X.std(axis=0, keepdims=True) + 1e-8
     X_norm = (X - X_mean) / X_std
+    
+    # PCA reduction if requested (crucial when n << D)
+    if pca_dims is not None:
+        actual_dims = min(pca_dims, n - 1, X_norm.shape[1])
+        pca = PCA(n_components=actual_dims, random_state=42)
+        X_norm = pca.fit_transform(X_norm)
+        var_explained = pca.explained_variance_ratio_.sum()
+        print(f"  PCA: {X.shape[1]}D → {actual_dims}D ({var_explained:.1%} variance)")
     
     # Standardize target
     y_mean = y.mean()
@@ -254,12 +265,14 @@ def main():
     parser = argparse.ArgumentParser(description='Wind Speed Probe for LeWM')
     parser.add_argument('--ckpt', required=True, help='Model checkpoint')
     parser.add_argument('--model-type', required=True, choices=['tiny', 'small', 'dinov2'])
-    parser.add_argument('--sessions-dir', required=True,
-                        help='Directory with extracted sessions')
+    parser.add_argument('--sessions-dir', default=None,
+                        help='Directory with extracted sessions (optional if wind-data has absolute paths)')
     parser.add_argument('--wind-data', required=True,
                         help='Wind dataset JSON from build_wind_dataset.py')
     parser.add_argument('--max-frames', type=int, default=100,
                         help='Max frames per session')
+    parser.add_argument('--pca-dims', type=int, default=10,
+                        help='PCA dimensions (0 to disable)')
     parser.add_argument('--output', default='wind_probe_results.json')
     parser.add_argument('--device', default='cuda')
     args = parser.parse_args()
@@ -270,36 +283,35 @@ def main():
     with open(args.wind_data) as f:
         wind_dataset = json.load(f)
     
-    wind_by_session = {}
-    for entry in wind_dataset['sessions']:
-        # Key by session directory name
-        session_name = Path(entry['session_path']).name
-        wind_by_session[session_name] = entry
-    
-    print(f"Wind data for {len(wind_by_session)} sessions")
+    print(f"Wind data for {len(wind_dataset['sessions'])} sessions")
     
     # Load model
     print(f"Loading model ({args.model_type})...")
     encoder, projector, embed_dim = load_model(args.ckpt, args.model_type, device)
     
-    # Process sessions
-    sessions_dir = Path(args.sessions_dir)
-    session_dirs = sorted([d for d in sessions_dir.iterdir() if d.is_dir()])
+    # Build session list: use absolute paths from JSON, or fall back to sessions-dir
+    session_entries = []
+    for entry in wind_dataset['sessions']:
+        session_path = Path(entry['session_path'])
+        if session_path.is_absolute() and session_path.exists():
+            session_entries.append((session_path, entry))
+        elif args.sessions_dir:
+            # Try matching by name in sessions_dir
+            candidate = Path(args.sessions_dir) / session_path.name
+            if candidate.exists():
+                session_entries.append((candidate, entry))
+    
+    session_entries.sort(key=lambda x: x[0].name)
     
     features = []
     wind_speeds = []
     wind_gusts = []
     session_names = []
+    session_splits = []
     
-    for session_dir in session_dirs:
+    for session_dir, wind_info in session_entries:
         session_name = session_dir.name
-        
-        if session_name not in wind_by_session:
-            print(f"  {session_name}: no wind data, skipping")
-            continue
-        
-        wind_info = wind_by_session[session_name]
-        wind_speed = wind_info['wind_speed_10m_ms']
+        wind_speed = wind_info.get('wind_speed_10m_ms')
         
         if wind_speed is None:
             print(f"  {session_name}: null wind speed, skipping")
@@ -319,6 +331,7 @@ def main():
         wind_speeds.append(wind_speed)
         wind_gusts.append(wind_info.get('wind_gusts_10m_ms', wind_speed))
         session_names.append(session_name)
+        session_splits.append(wind_info.get('split', 'unknown'))
         print(f"{len(frames)} frames → {feature.shape[0]}D feature")
     
     if len(features) < 5:
@@ -333,9 +346,11 @@ def main():
     print(f"Wind speed range: {min(wind_speeds):.1f} - {max(wind_speeds):.1f} m/s")
     print(f"Wind speed mean: {np.mean(wind_speeds):.1f} ± {np.std(wind_speeds):.1f} m/s")
     
+    pca_dims = args.pca_dims if args.pca_dims > 0 else None
+    
     # Run probe on wind speed
     print(f"\n--- Wind Speed Probe ---")
-    speed_results = run_wind_probe(features, wind_speeds)
+    speed_results = run_wind_probe(features, wind_speeds, pca_dims=pca_dims)
     print(f"  CV R²: {speed_results['cv_r2_mean']:.4f} ± {speed_results['cv_r2_std']:.4f}")
     print(f"  CV MSE: {speed_results['cv_mse_mean']:.4f} ± {speed_results['cv_mse_std']:.4f}")
     print(f"  Train R²: {speed_results['train_r2']:.4f}")
@@ -343,7 +358,7 @@ def main():
     
     # Run probe on wind gusts
     print(f"\n--- Wind Gust Probe ---")
-    gust_results = run_wind_probe(features, wind_gusts)
+    gust_results = run_wind_probe(features, wind_gusts, pca_dims=pca_dims)
     print(f"  CV R²: {gust_results['cv_r2_mean']:.4f} ± {gust_results['cv_r2_std']:.4f}")
     print(f"  CV MSE: {gust_results['cv_mse_mean']:.4f} ± {gust_results['cv_mse_std']:.4f}")
     
@@ -351,7 +366,7 @@ def main():
     print(f"\n--- Random Baseline ---")
     np.random.seed(42)
     random_features = [np.random.randn(features[0].shape[0]) for _ in features]
-    random_results = run_wind_probe(random_features, wind_speeds)
+    random_results = run_wind_probe(random_features, wind_speeds, pca_dims=pca_dims)
     print(f"  CV R²: {random_results['cv_r2_mean']:.4f} ± {random_results['cv_r2_std']:.4f}")
     
     # Save results
@@ -365,6 +380,7 @@ def main():
         'data': {
             'n_sessions': len(features),
             'sessions': session_names,
+            'splits': session_splits,
             'wind_speeds': wind_speeds,
             'wind_gusts': wind_gusts,
         },
