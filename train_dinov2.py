@@ -12,30 +12,10 @@ import torch
 from lightning.pytorch.loggers import WandbLogger
 from omegaconf import OmegaConf, open_dict
 
+from dinov2_utils import DINOv2Encoder
 from jepa import JEPA
 from module import ARPredictor, Embedder, MLP, SIGReg
 from utils import get_column_normalizer, get_img_preprocessor, ModelObjectCallBack
-
-
-class DINOv2Encoder(torch.nn.Module):
-    """Wrapper around DINOv2 to match HF ViT interface."""
-    def __init__(self, freeze=True):
-        super().__init__()
-        self.model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14', pretrained=True)
-        self.config = type('Config', (), {'hidden_size': 384})()
-        if freeze:
-            for p in self.model.parameters():
-                p.requires_grad = False
-
-    def forward(self, x, interpolate_pos_encoding=True):
-        # DINOv2 forward returns cls token directly, but we need to match
-        # the HF interface that returns .last_hidden_state with cls at [:, 0]
-        features = self.model.forward_features(x)
-        # patch_tokens shape: dict with keys like 'x_norm_clstoken', 'x_norm_patchtokens'
-        cls_token = features['x_norm_clstoken'].unsqueeze(1)  # (B, 1, D)
-        patch_tokens = features['x_norm_patchtokens']  # (B, N, D)
-        hidden_states = torch.cat([cls_token, patch_tokens], dim=1)
-        return type('Output', (), {'last_hidden_state': hidden_states})()
 
 
 def lejepa_forward(self, batch, stage, cfg):

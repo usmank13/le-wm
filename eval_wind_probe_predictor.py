@@ -81,76 +81,20 @@ def infer_predictor_config(sd):
 
 def load_full_model(ckpt_path, model_type, device):
     """Load entire JEPA model (encoder + predictor + action_encoder)."""
-    from jepa import JEPA
-    from module import MLP, ARPredictor, Embedder
+    from model_loading import load_full_jepa
 
-    ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
-    sd = ckpt['state_dict'] if 'state_dict' in ckpt else ckpt
-
-    if model_type == 'dinov2':
-        from train_dinov2 import DINOv2Encoder
-        encoder = DINOv2Encoder(freeze=True)
-        hidden_dim = 384
-    elif model_type == 'tiny':
-        import stable_pretraining as spt
-        encoder = spt.backbone.utils.vit_hf(
-            'tiny', patch_size=14, image_size=224,
-            pretrained=False, use_mask_token=False)
-        hidden_dim = 192
-    elif model_type == 'small':
-        import stable_pretraining as spt
-        encoder = spt.backbone.utils.vit_hf(
-            'small', patch_size=14, image_size=224,
-            pretrained=False, use_mask_token=False)
-        hidden_dim = 384
-    else:
-        raise ValueError(f"Unknown model type: {model_type}")
-
-    embed_dim = 192
-
-    # Infer predictor config from weights
-    pcfg = infer_predictor_config(sd)
+    model, embed_dim, hist_size, act_dim, meta = load_full_jepa(ckpt_path, device, freeze_encoder=True)
+    pcfg = meta['predictor_cfg']
     print(f"  Predictor config: frames={pcfg['num_frames']}, depth={pcfg['depth']}, "
           f"heads={pcfg['heads']}, input={pcfg['input_dim']}, hidden={pcfg['hidden_dim']}")
-
-    projector = MLP(input_dim=hidden_dim, output_dim=embed_dim,
-                    hidden_dim=2048, norm_fn=torch.nn.BatchNorm1d)
-
-    predictor = ARPredictor(
-        num_frames=pcfg['num_frames'],
-        depth=pcfg['depth'],
-        heads=pcfg['heads'],
-        mlp_dim=pcfg['mlp_dim'],
-        input_dim=pcfg['input_dim'],
-        hidden_dim=pcfg['hidden_dim'],
-        dim_head=pcfg['dim_head'],
-    )
-
-    pred_proj = MLP(input_dim=pcfg['hidden_dim'],
-                    output_dim=embed_dim, hidden_dim=2048,
-                    norm_fn=torch.nn.BatchNorm1d)
-
-    # Infer action dim from action_encoder weights
-    act_w = sd.get('model.action_encoder.patch_embed.weight')
-    act_dim = act_w.shape[1] if act_w is not None else 4
-    action_encoder = Embedder(input_dim=act_dim, emb_dim=embed_dim)
-
-    model = JEPA(
-        encoder=encoder, predictor=predictor,
-        action_encoder=action_encoder, projector=projector,
-        pred_proj=pred_proj,
-    )
-
-    model_sd = {k.replace('model.', '', 1): v
-                for k, v in sd.items() if k.startswith('model.')}
-    missing, unexpected = model.load_state_dict(model_sd, strict=False)
+    missing = meta.get('missing') or []
+    unexpected = meta.get('unexpected') or []
     if missing:
         print(f"  Warning: missing keys: {missing}")
     if unexpected:
         print(f"  Warning: unexpected keys: {unexpected[:5]}")
-    model = model.to(device).eval()
 
-    return model, embed_dim, pcfg['num_frames']
+    return model, embed_dim, hist_size
 
 
 def extract_video_frames(session_dir, target_size=224, max_frames=200, frameskip=2):

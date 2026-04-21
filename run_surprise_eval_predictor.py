@@ -33,58 +33,13 @@ IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
 
 
 def load_full_model(ckpt_path, model_type, device):
-    """Load full JEPA model from checkpoint, inferring architecture from weights."""
-    from eval_wind_probe_predictor import infer_predictor_config
-    from jepa import JEPA
-    from module import MLP, ARPredictor, Embedder
-
-    ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
-    sd = ckpt['state_dict'] if 'state_dict' in ckpt else ckpt
-
-    if model_type == 'dinov2':
-        from train_dinov2 import DINOv2Encoder
-        encoder = DINOv2Encoder(freeze=True)
-        hidden_dim = 384
-    elif model_type == 'tiny':
-        import stable_pretraining as spt
-        encoder = spt.backbone.utils.vit_hf(
-            'tiny', patch_size=14, image_size=224, pretrained=False, use_mask_token=False)
-        hidden_dim = 192
-    elif model_type == 'small':
-        import stable_pretraining as spt
-        encoder = spt.backbone.utils.vit_hf(
-            'small', patch_size=14, image_size=224, pretrained=False, use_mask_token=False)
-        hidden_dim = 384
-
-    embed_dim = 192
-    pcfg = infer_predictor_config(sd)
-
-    projector = MLP(input_dim=hidden_dim, output_dim=embed_dim,
-                    hidden_dim=2048, norm_fn=torch.nn.BatchNorm1d)
-    predictor = ARPredictor(
-        num_frames=pcfg['num_frames'], depth=pcfg['depth'],
-        heads=pcfg['heads'], mlp_dim=pcfg['mlp_dim'],
-        input_dim=pcfg['input_dim'], hidden_dim=pcfg['hidden_dim'],
-        dim_head=pcfg['dim_head'])
-    pred_proj_input = pcfg.get('output_dim', pcfg['hidden_dim'])
-    pred_proj = MLP(input_dim=pred_proj_input, output_dim=embed_dim,
-                    hidden_dim=2048, norm_fn=torch.nn.BatchNorm1d)
-
-    act_w = sd.get('model.action_encoder.patch_embed.weight')
-    act_dim = act_w.shape[1] if act_w is not None else 4
-    action_encoder = Embedder(input_dim=act_dim, emb_dim=embed_dim)
-
-    model = JEPA(encoder=encoder, predictor=predictor,
-                 action_encoder=action_encoder, projector=projector,
-                 pred_proj=pred_proj)
-
-    model_sd = {k.replace('model.', '', 1): v for k, v in sd.items() if k.startswith('model.')}
-    missing, unexpected = model.load_state_dict(model_sd, strict=False)
+    """Load full JEPA model from checkpoint."""
+    from model_loading import load_full_jepa
+    model, embed_dim, hist_size, act_dim, meta = load_full_jepa(ckpt_path, device, freeze_encoder=True)
+    missing = meta.get('missing') or []
     if missing:
         print(f"  Warning: missing keys: {missing[:3]}")
-
-    model.to(device).eval()
-    return model, embed_dim, pcfg['num_frames'], act_dim
+    return model, embed_dim, hist_size, act_dim
 
 
 # === Perturbation functions (operate on numpy pixel arrays) ===
