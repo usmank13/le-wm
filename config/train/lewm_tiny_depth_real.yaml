@@ -2,7 +2,7 @@ defaults:
   - _self_
   - data: aigen_depth_real
 
-output_model_name: lewm_tiny_depth
+output_model_name: lewm_tiny_depth_reparam
 subdir: ${hydra:job.id}
 
 num_workers: 6
@@ -55,6 +55,13 @@ predictor:
   dim_head: 64
   dropout: 0.1
   emb_dropout: 0.0
+  rep_cfg:
+    low_rank: 16
+    identity: false
+
+# Lightweight diagnostics for the reparameterized predictor.
+diagnostics:
+  log_stats_interval: 200
 
 loss:
   depth_reg_weight: 0.1

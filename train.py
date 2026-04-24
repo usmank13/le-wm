@@ -11,8 +11,34 @@ from lightning.pytorch.loggers import WandbLogger
 from omegaconf import OmegaConf, open_dict
 
 from jepa import JEPA
-from module import ARPredictor, Embedder, MLP, SIGReg
+from module import ARPredictor, Embedder, MLP, SIGReg, enable_stats, pop_stats
 from utils import get_column_normalizer, get_img_preprocessor, ModelObjectCallBack
+
+
+def _maybe_log_predictor_diagnostics(self, cfg, stage):
+    """Opt-in periodic diagnostics for the predictor: attention entropy + RepLinear
+    branch contributions. No-op unless ``cfg.diagnostics.log_stats_interval`` is
+    set and > 0. Runs on the current global step without rerunning the forward —
+    stats for this step are collected inline by the enabled modules.
+    """
+    diag = cfg.get("diagnostics") if hasattr(cfg, "get") else None
+    if not diag:
+        return
+    interval = int(diag.get("log_stats_interval", 0) or 0)
+    if interval <= 0:
+        return
+    step = int(getattr(self, "global_step", 0))
+    if step % interval != 0:
+        return
+    stats = pop_stats(self.model.predictor)
+    flat = {}
+    for layer, ent in stats["attn_entropy"].items():
+        flat[f"{stage}/diag/attn_entropy/{layer}"] = ent.detach()
+    for layer, branches in stats["branch_contribs"].items():
+        for branch, val in branches.items():
+            flat[f"{stage}/diag/branch_norm/{layer}/{branch}"] = val.detach()
+    if flat:
+        self.log_dict(flat, on_step=True, sync_dist=False)
 
 
 def lejepa_forward(self, batch, stage, cfg):
@@ -24,6 +50,17 @@ def lejepa_forward(self, batch, stage, cfg):
 
     # Replace NaN values with 0 (occurs at sequence boundaries)
     batch["action"] = torch.nan_to_num(batch["action"], 0.0)
+
+    # Opt-in diagnostics: enable predictor stats for this step if interval hit.
+    # No-op when ``cfg.diagnostics.log_stats_interval`` is unset/0.
+    diag = cfg.get("diagnostics", None)
+    diag_enabled = False
+    if diag is not None:
+        interval = int(diag.get("log_stats_interval", 0) or 0)
+        step = int(getattr(self, "global_step", 0))
+        diag_enabled = interval > 0 and step % interval == 0
+        if diag_enabled:
+            enable_stats(self.model.predictor, True)
 
     output = self.model.encode(batch)
 
@@ -39,10 +76,14 @@ def lejepa_forward(self, batch, stage, cfg):
     # LeWM loss
     output["pred_loss"] = (pred_emb - tgt_emb).pow(2).mean()
     output["sigreg_loss"]= self.sigreg(emb.transpose(0, 1))
-    output["loss"] = output["pred_loss"] + lambd * output["sigreg_loss"]  
+    output["loss"] = output["pred_loss"] + lambd * output["sigreg_loss"]
 
     losses_dict = {f"{stage}/{k}": v.detach() for k, v in output.items() if "loss" in k}
     self.log_dict(losses_dict, on_step=True, sync_dist=True)
+
+    if diag_enabled:
+        _maybe_log_predictor_diagnostics(self, cfg, stage)
+        enable_stats(self.model.predictor, False)
     return output
 
 @hydra.main(version_base=None, config_path="./config/train", config_name="lewm")
